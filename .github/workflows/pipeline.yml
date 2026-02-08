@@ -1,0 +1,135 @@
+name: Kepler-186f Production-Grade CI/CD
+
+# -------------------------------------------------------------------------
+# Triggers:
+# - CI: Push to any branch except main/master → build & test only
+# - CD: Pull request or push to main/master → full release (Bump, Docker, Deploy)
+# - Manual workflow dispatch allowed
+# -------------------------------------------------------------------------
+on:
+  push:
+    branches-ignore:
+      - 'main'
+      - 'master'
+
+  pull_request:
+    branches:
+      - 'main'
+      - 'master'
+
+  workflow_dispatch:
+
+jobs:
+
+  # -------------------------------------------------------------------------
+  # Job 1: Continuous Integration (CI) for Feature/Chore Branches
+  # -------------------------------------------------------------------------
+  ci-build:
+    name: CI - Build & Test on Feature/Chore Branches
+    runs-on: ubuntu-latest
+    if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master'
+
+    steps:
+      # Step 1: Checkout the code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Step 2: Setup Java environment with Maven caching
+      - name: Setup Java JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+          cache: 'maven'
+
+      # Step 3: Compile and package the JAR (skip tests for speed)
+      - name: Maven Build & Package
+        run: mvn -f myapp/pom.xml clean package -DskipTests
+
+      # Step 4: Upload temporary artifact for PR or CI purposes
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-jar-artifact
+          path: myapp/target/*.jar
+
+  # -------------------------------------------------------------------------
+  # Job 2: Continuous Deployment (CD) for Main/Master Branch
+  # -------------------------------------------------------------------------
+  cd-release:
+    name: CD - Automated Release & Dockerization
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    env:
+      IMAGE_NAME: efratgrinboim/maven-hello-world
+
+    steps:
+      # Step 1: Checkout repository with push permissions (needed for version bump commit)
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Step 2: Setup Java environment with Maven caching
+      - name: Setup Java JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+          cache: 'maven'
+
+      # Step 3: Bump Patch Version (1.0.0 → 1.0.1)
+      - name: Bump Patch Version
+        id: bump
+        run: |
+          mvn -f myapp/pom.xml build-helper:parse-version versions:set \
+            -DnewVersion=\${parsedVersion.majorVersion}.\${parsedVersion.minorVersion}.\${parsedVersion.nextIncrementalVersion} \
+            versions:commit
+          NEW_VER=$(mvn -f myapp/pom.xml help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "NEW_VERSION=$NEW_VER" >> $GITHUB_ENV
+
+      # Step 4: Commit and push version change back to Git (skip CI to prevent loop)
+      - name: Commit & Push Version Bump
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git commit -am "ci: bump version to ${{ env.NEW_VERSION }} [skip ci]" || echo "No changes detected"
+          git push
+
+      # Step 5: Build and package the final JAR
+      - name: Build Final JAR
+        run: mvn -f myapp/pom.xml clean package -DskipTests
+
+      # Step 6: Upload production artifact
+      - name: Upload Production Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hello-world-jar
+          path: myapp/target/*.jar
+
+      # Step 7: Authenticate with Docker Hub
+      - name: Docker Login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Step 8: Build and push Docker image with version tag and 'latest'
+      - name: Build & Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ env.NEW_VERSION }}
+            ${{ env.IMAGE_NAME }}:latest
+
+      # Step 9: Verify Docker image by pulling and running
+      - name: Verify Docker Execution
+        run: |
+          docker pull ${{ env.IMAGE_NAME }}:${{ env.NEW_VERSION }}
+          docker run --rm ${{ env.IMAGE_NAME }}:${{ env.NEW_VERSION }}
