@@ -1,13 +1,15 @@
 name: Kepler-186f Production-Grade CI/CD
 
 # -------------------------------------------------------------------------
-# Triggers:
-# - CI: Push to any branch except main/master → build & test only
-# - CD: Pull request or push to main/master → full release (Bump, Docker, Deploy)
-# - Manual workflow dispatch allowed
+# This workflow provides:
+# - CI for every change.
+# - CD only for main/master branches.
+# - Automatic patch version bumping.
+# - Docker image build & push.
+# - Runtime smoke testing after publishing.
 # -------------------------------------------------------------------------
 on:
-  push:
+  push: 
     branches:
       - '**'
       
@@ -15,59 +17,80 @@ on:
     branches:
       - 'main'
       - 'master'
+      
+  # Allow us to click "Run" manually in GitHub
+  workflow_dispatch: 
 
-  workflow_dispatch:
+# Minimal permissions required:
+# - contents:write -> needed to commit version bumps
+# - packages:write -> needed to push Docker images
+permissions:
+  contents: write
+  packages: write
+
+# If we push twice quickly, cancel the old run and keep only the latest one
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-
   # -------------------------------------------------------------------------
-  # Job 1: Continuous Integration (CI) for Feature/Chore Branches
+  # JOB 1: CI — BUILD & TEST (The "Safety Check")
   # -------------------------------------------------------------------------
+  
   ci-build:
-    name: CI - Build & Test on Feature/Chore Branches
+    name: CI — Build & Verify
     runs-on: ubuntu-latest
+    # Skip this if the bot itself made the commit (prevents infinite loops)
+    if: |
+      github.actor != 'github-actions[bot]' && 
+      (github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]'))
+      
     steps:
-      # Step 1: Checkout the code
+      # Step 1: Get the code from GitHub
       - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      # Step 2: Setup Java environment with Maven caching
-      - name: Setup Java JDK 11
+      # Step 2: Setup Java and Speed up Maven (Cache)
+      - name: Setup Java 11 + enable Maven cache
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '11'
-          cache: 'maven'
+          cache: 'maven' # This saves time by remembering downloaded libraries
+          
+      # Step 3: Compile the code and run tests
+      - name: Run tests and validation
+        run: mvn -f myapp/pom.xml clean verify
 
-      # Step 3: Compile and package the JAR (skip tests for speed)
-      - name: Maven Build & Package
-        run: mvn -f myapp/pom.xml clean package -DskipTests
-
-      # Step 4: Upload temporary artifact for PR or CI purposes
+      # Step 4: Save the built JAR file for later
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dev-jar-artifact
+          name: dev-jar
           path: myapp/target/*.jar
+          retention-days: 1 # Clean up after 1 day to save space
 
   # -------------------------------------------------------------------------
-  # Job 2: Continuous Deployment (CD) for Main/Master Branch
+  # JOB 2: CD — RELEASE & PUBLISH (The "Production Delivery")
   # -------------------------------------------------------------------------
   cd-release:
-    name: CD - Automated Release & Dockerization
+    name: CD — Bump & Publish
+    needs: ci-build
     runs-on: ubuntu-latest
+
+    # Only run on push events to main/master
     if: |
-      github.event_name == 'push' &&
+      github.event_name == 'push' && 
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
+      github.actor != 'github-actions[bot]' &&
       !contains(github.event.head_commit.message, '[skip ci]')
       
     env:
       IMAGE_NAME: efratgrinboim/maven-hello-world
 
     steps:
-      # Step 1: Checkout repository with push permissions (needed for version bump commit)
+      # Step 1: Checkout Code with full history
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
@@ -82,7 +105,7 @@ jobs:
           java-version: '11'
           cache: 'maven'
 
-      # Step 3: Bump Patch Version (1.0.0 → 1.0.1)
+      # Step 3: Bump version - Automatically increase the patch version in pom.xml
       - name: Bump Patch Version
         id: bump
         run: |
@@ -92,44 +115,56 @@ jobs:
           NEW_VER=$(mvn -f myapp/pom.xml help:evaluate -Dexpression=project.version -q -DforceStdout)
           echo "NEW_VERSION=$NEW_VER" >> $GITHUB_ENV
 
-      # Step 4: Commit and push version change back to Git (skip CI to prevent loop)
+      # Step 4: Commit and push the new version if needed
       - name: Commit & Push Version Bump
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git commit -am "ci: bump version to ${{ env.NEW_VERSION }} [skip ci]" || echo "No changes detected"
-          git push
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "ci: bump version to ${{ env.NEW_VERSION }} [skip ci]" || echo "Nothing to commit"
+          git push || echo "Nothing to push"
 
-      # Step 5: Build and package the final JAR
+      # Step 5: Build final production JAR
       - name: Build Final JAR
         run: mvn -f myapp/pom.xml clean package -DskipTests
 
-      # Step 6: Upload production artifact
-      - name: Upload Production Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hello-world-jar
-          path: myapp/target/*.jar
-
-      # Step 7: Authenticate with Docker Hub
-      - name: Docker Login
+      # Step 6: Authenticate to Docker Hub
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Step 8: Build and push Docker image with version tag and 'latest'
-      - name: Build & Push Docker Image
+      # Step 7: Build the image and push it with version and latest tags
+      - name: Build & Push Image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:${{ env.NEW_VERSION }}
-            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:latest 
+      # -----------------------------------------------------------------------------
+      # Pull the newly published image and run it briefly.
+      # If the container crashes immediately — the pipeline fails.
+      # -----------------------------------------------------------------------------
 
-      # Step 9: Verify Docker image by pulling and running
-      - name: Verify Docker Execution
+      # Step 8: Verify Docker image by pulling and running
+      - name: Verification — Pull & Run
         run: |
+          echo "Verifying image availability..."
           docker pull ${{ env.IMAGE_NAME }}:${{ env.NEW_VERSION }}
-          docker run --rm ${{ env.IMAGE_NAME }}:${{ env.NEW_VERSION }}
+          
+          echo "Executing Smoke Test..."
+          docker run -d --name smoke-check ${{ env.IMAGE_NAME }}:${{ env.NEW_VERSION }}
+          
+          sleep 5
+          
+          if [ "$(docker inspect -f '{{.State.Running}}' smoke-check)" == "true" ]; then
+            echo "Success: Container is healthy."
+            docker rm -f smoke-check
+          else
+            echo "Error: Container crashed after start."
+            docker logs smoke-check || true
+            docker rm -f smoke-check || true
+            exit 1
+          fi
