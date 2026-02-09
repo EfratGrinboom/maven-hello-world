@@ -8,10 +8,9 @@ name: Kepler-186f Production-Grade CI/CD
 # -------------------------------------------------------------------------
 on:
   push:
-    branches-ignore:
-      - 'main'
-      - 'master'
-
+    branches:
+      - '**'
+      
   pull_request:
     branches:
       - 'main'
@@ -27,8 +26,6 @@ jobs:
   ci-build:
     name: CI - Build & Test on Feature/Chore Branches
     runs-on: ubuntu-latest
-    if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master'
-
     steps:
       # Step 1: Checkout the code
       - name: Checkout Code
@@ -61,8 +58,11 @@ jobs:
   cd-release:
     name: CD - Automated Release & Dockerization
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-
+    if: |
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
+      !contains(github.event.head_commit.message, '[skip ci]')
+      
     env:
       IMAGE_NAME: efratgrinboim/maven-hello-world
 
