@@ -155,16 +155,9 @@ jobs:
           docker pull ${{ env.IMAGE_NAME }}:${{ env.NEW_VERSION }}
           
           echo "Executing Smoke Test..."
-          docker run -d --name smoke-check ${{ env.IMAGE_NAME }}:${{ env.NEW_VERSION }}
-          
-          sleep 5
-          
-          if [ "$(docker inspect -f '{{.State.Running}}' smoke-check)" == "true" ]; then
-            echo "Success: Container is healthy."
-            docker rm -f smoke-check
+          if docker run --rm --name smoke-check ${{ env.IMAGE_NAME }}:${{ env.NEW_VERSION }} | grep -q "Hello World"; then
+            echo "Success: Application printed expected output and exited safely."
           else
-            echo "Error: Container crashed after start."
-            docker logs smoke-check || true
-            docker rm -f smoke-check || true
+            echo "Error: Application did not produce the expected output!"
             exit 1
           fi
