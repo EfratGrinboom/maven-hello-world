@@ -7,7 +7,6 @@ image:
 
 serviceAccount:
   create: true
-  name: "maven-sa"
 
 service:
   type: LoadBalancer
@@ -39,11 +38,5 @@ securityContext:
 
 containerSecurityContext:
   allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: true
-
-podAnnotations: {}
-
-nodeSelector: {}
-tolerations: []
-affinity: {}
+  # readOnlyRootFilesystem: true
 

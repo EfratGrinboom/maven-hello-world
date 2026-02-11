@@ -8,9 +8,8 @@ spec:
   type: {{ .Values.service.type }}
   ports:
     - port: {{ .Values.service.port }}
-      targetPort: http
+      targetPort: {{ .Values.service.targetPort }} 
       protocol: TCP
       name: http
   selector:
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/name: {{ include "maven-hello-world.name" . }}
+    {{- include "maven-hello-world.selectorLabels" . | nindent 4 }}
