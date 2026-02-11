@@ -39,7 +39,7 @@ jobs:
       - name: Deploy with Helm
         run: |
           helm upgrade --install maven-app ./charts/maven-hello-world \
-            --set image.repository=${{ secrets.DOCKER_USERNAME }}/maven-hello-world \
+            --set image.repository=efratgrinboim/maven-hello-world \
             --set image.tag=latest \
             --set service.type=LoadBalancer \
             --set image.pullPolicy=Always
