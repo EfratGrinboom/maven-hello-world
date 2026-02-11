@@ -39,11 +39,4 @@ securityContext:
 
 containerSecurityContext:
   allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: true
-
-podAnnotations: {}
-
-nodeSelector: {}
-tolerations: []
-affinity: {}
-
+  # readOnlyRootFilesystem: true
