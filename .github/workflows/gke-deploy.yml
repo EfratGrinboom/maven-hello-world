@@ -1,0 +1,45 @@
+name: GKE Cloud Deployment
+
+on:
+  workflow_run:
+    workflows: ["Kepler-186f Production-Grade CI/CD"]
+    types:
+      - completed
+    branches:
+      - main
+      - master
+
+jobs:
+  deploy-to-gke:
+    name: Deploy to Google Cloud
+    # run only if the Pipeline success
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 1. connect to Google Cloud with the JSON Secret
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # 2. connection settings
+      - name: Get GKE Credentials
+        uses: google-github-actions/get-gke-credentials@v1
+        with:
+          cluster_name: kepler-cluster
+          location: me-west1
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      # 3. deploy with Helm
+      # using the latest image
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install maven-app ./charts/maven-hello-world \
+            --set image.repository=${{ secrets.DOCKER_USERNAME }}/maven-hello-world \
+            --set image.tag=latest \
+            --set service.type=LoadBalancer \
+            --set image.pullPolicy=Always
