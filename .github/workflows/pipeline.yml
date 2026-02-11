@@ -148,16 +148,22 @@ jobs:
       # If the container crashes immediately — the pipeline fails.
       # -----------------------------------------------------------------------------
 
-      # Step 8: Verify Docker image by pulling and running
+      # Step 8: Verification — Pull & Run (Async Smoke Test)
       - name: Verification — Pull & Run
         run: |
-          echo "Verifying image availability..."
-          docker pull ${{ env.IMAGE_NAME }}:${{ env.NEW_VERSION }}
+          echo "Starting container in background..."
+          docker run -d --rm --name smoke-check -p 8080:8080 ${{ env.IMAGE_NAME }}:${{ env.NEW_VERSION }}
           
-          echo "Executing Smoke Test..."
-          if docker run --rm --name smoke-check ${{ env.IMAGE_NAME }}:${{ env.NEW_VERSION }} | grep -q "Hello World"; then
-            echo "Success: Application printed expected output and exited safely."
+          echo "Waiting for server to initialize..."
+          sleep 5
+          
+          echo "Testing endpoint..."
+          if curl -s http://localhost:8080 | grep -q "Hello World"; then
+            echo "Success: Server is responding correctly!"
+            docker stop smoke-check
           else
-            echo "Error: Application did not produce the expected output!"
+            echo "Error: Server failed to respond!"
+            docker logs smoke-check
+            docker stop smoke-check
             exit 1
           fi
