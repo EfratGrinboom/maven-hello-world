@@ -38,20 +38,23 @@ spec:
             httpGet:
               path: /
               port: http
-            initialDelaySeconds: 5
+            initialDelaySeconds: 20
             periodSeconds: 10
+            timeoutSeconds: 5
 
           livenessProbe:
             httpGet:
               path: /
               port: http
-            initialDelaySeconds: 15
+            initialDelaySeconds: 40
             periodSeconds: 20
+            timeoutSeconds: 5
 
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
 
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+
 
 
