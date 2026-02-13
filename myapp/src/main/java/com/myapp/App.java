@@ -18,7 +18,7 @@ public class App {
                 os.close();
             }
         });
-
+        System.out.println( "Hello World from Efrat Hager!" );
         System.out.println("Server is starting on port 8080...");
         server.setExecutor(null); 
         server.start();
